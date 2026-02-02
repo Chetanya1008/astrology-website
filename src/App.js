@@ -1,5 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, Calendar, Sparkles, Moon, Sun, Star, Lock, LogOut, Edit2, Trash2, Save, X } from 'lucide-react';
+import { createClient } from '@supabase/supabase-js';
+
+// 🔥 REPLACE THESE WITH YOUR SUPABASE CREDENTIALS
+const SUPABASE_URL = 'https://kkjozctuulwkdnclqhwg.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtram96Y3R1dWx3a2RuY2xxaHdnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAwMTM2NzgsImV4cCI6MjA4NTU4OTY3OH0.aacurX-b35TOycBNq0QnUMmh8aT4g3L3UQxVS-6X1Hk';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const ZODIAC_SIGNS = [
   { name: 'Aries', symbol: '♈', dates: 'Mar 21 - Apr 19', icon: '🐏', gradient: 'from-red-400 to-orange-400' },
@@ -33,37 +40,49 @@ const AstrologyWebsite = () => {
   });
   const [storedPassword, setStoredPassword] = useState('admin123');
   const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  // Load data from localStorage on component mount
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = () => {
+  const loadData = async () => {
+    setLoading(true);
     try {
       // Load horoscopes
-      const savedHoroscopes = localStorage.getItem('horoscopes');
-      if (savedHoroscopes) {
-        setHoroscopes(JSON.parse(savedHoroscopes));
+      const { data: horoscopeData, error: horoscopeError } = await supabase
+        .from('horoscopes')
+        .select('*');
+
+      if (horoscopeError) throw horoscopeError;
+
+      const horoscopeMap = {};
+      if (horoscopeData) {
+        horoscopeData.forEach(item => {
+          horoscopeMap[item.sign_name] = item.content;
+        });
       }
-      
+      setHoroscopes(horoscopeMap);
+
       // Load admin password
-      const savedPassword = localStorage.getItem('admin_password');
-      if (savedPassword) {
-        setStoredPassword(savedPassword);
+      const { data: passwordData, error: passwordError } = await supabase
+        .from('admin_settings')
+        .select('setting_value')
+        .eq('setting_key', 'admin_password')
+        .single();
+
+      if (passwordError && passwordError.code !== 'PGRST116') {
+        console.error('Password error:', passwordError);
+      }
+
+      if (passwordData) {
+        setStoredPassword(passwordData.setting_value);
       }
     } catch (error) {
       console.error('Error loading data:', error);
-    }
-  };
-
-  const saveHoroscopes = (data) => {
-    try {
-      localStorage.setItem('horoscopes', JSON.stringify(data));
-    } catch (error) {
-      console.error('Error saving horoscopes:', error);
-      setMessage('Error saving data. Please try again.');
-      setTimeout(() => setMessage(''), 3000);
+      setMessage('Error loading data. Please refresh the page.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -88,28 +107,75 @@ const AstrologyWebsite = () => {
     setEditContent(horoscopes[signName] || '');
   };
 
-  const handleSave = () => {
-    const updated = { ...horoscopes, [editingSign]: editContent };
-    setHoroscopes(updated);
-    saveHoroscopes(updated);
-    setEditingSign(null);
-    setEditContent('');
-    setMessage('Horoscope updated successfully!');
-    setTimeout(() => setMessage(''), 3000);
-  };
+  const handleSave = async () => {
+    try {
+      // Check if horoscope exists
+      const { data: existing } = await supabase
+        .from('horoscopes')
+        .select('id')
+        .eq('sign_name', editingSign)
+        .single();
 
-  const handleDelete = (signName) => {
-    if (window.confirm(`Delete horoscope for ${signName}?`)) {
-      const updated = { ...horoscopes };
-      delete updated[signName];
-      setHoroscopes(updated);
-      saveHoroscopes(updated);
-      setMessage('Horoscope deleted successfully!');
+      if (existing) {
+        // Update existing
+        const { error } = await supabase
+          .from('horoscopes')
+          .update({ 
+            content: editContent,
+            updated_at: new Date().toISOString()
+          })
+          .eq('sign_name', editingSign);
+
+        if (error) throw error;
+      } else {
+        // Insert new
+        const { error } = await supabase
+          .from('horoscopes')
+          .insert([{ 
+            sign_name: editingSign, 
+            content: editContent 
+          }]);
+
+        if (error) throw error;
+      }
+
+      // Update local state
+      setHoroscopes({ ...horoscopes, [editingSign]: editContent });
+      setEditingSign(null);
+      setEditContent('');
+      setMessage('Horoscope updated successfully!');
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Error saving:', error);
+      setMessage('Error saving horoscope. Please try again.');
       setTimeout(() => setMessage(''), 3000);
     }
   };
 
-  const handleChangePassword = () => {
+  const handleDelete = async (signName) => {
+    if (window.confirm(`Delete horoscope for ${signName}?`)) {
+      try {
+        const { error } = await supabase
+          .from('horoscopes')
+          .delete()
+          .eq('sign_name', signName);
+
+        if (error) throw error;
+
+        const updated = { ...horoscopes };
+        delete updated[signName];
+        setHoroscopes(updated);
+        setMessage('Horoscope deleted successfully!');
+        setTimeout(() => setMessage(''), 3000);
+      } catch (error) {
+        console.error('Error deleting:', error);
+        setMessage('Error deleting horoscope. Please try again.');
+        setTimeout(() => setMessage(''), 3000);
+      }
+    }
+  };
+
+  const handleChangePassword = async () => {
     if (passwordForm.current !== storedPassword) {
       setMessage('Current password is incorrect');
       return;
@@ -124,14 +190,22 @@ const AstrologyWebsite = () => {
     }
 
     try {
-      localStorage.setItem('admin_password', passwordForm.new);
+      const { error } = await supabase
+        .from('admin_settings')
+        .update({ setting_value: passwordForm.new })
+        .eq('setting_key', 'admin_password');
+
+      if (error) throw error;
+
       setStoredPassword(passwordForm.new);
       setMessage('Password changed successfully!');
       setShowChangePassword(false);
       setPasswordForm({ current: '', new: '', confirm: '' });
       setTimeout(() => setMessage(''), 3000);
     } catch (error) {
-      setMessage('Error changing password');
+      console.error('Error changing password:', error);
+      setMessage('Error changing password. Please try again.');
+      setTimeout(() => setMessage(''), 3000);
     }
   };
 
@@ -143,6 +217,17 @@ const AstrologyWebsite = () => {
       day: 'numeric' 
     });
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-50 to-blue-100 flex items-center justify-center">
+        <div className="text-center">
+          <Sparkles className="w-16 h-16 text-purple-500 animate-pulse mx-auto mb-4" />
+          <p className="text-gray-600 text-lg">Loading cosmic wisdom...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (view === 'admin' && !isAuthenticated) {
     return (
@@ -206,31 +291,31 @@ const AstrologyWebsite = () => {
       <div className="min-h-screen bg-gradient-to-br from-purple-100 via-pink-50 to-blue-100 p-4">
         <div className="max-w-6xl mx-auto">
           <div className="bg-white/80 backdrop-blur-sm rounded-3xl shadow-2xl p-8 border border-purple-200">
-            <div className="flex justify-between items-center mb-8 pb-6 border-b border-purple-200">
+            <div className="flex justify-between items-center mb-8 pb-6 border-b border-purple-200 flex-wrap gap-4">
               <div>
                 <h1 className="text-4xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent mb-2">
                   Admin Dashboard
                 </h1>
                 <p className="text-gray-600">Manage your daily horoscopes</p>
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-wrap">
                 <button
                   onClick={() => setShowChangePassword(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg"
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl hover:from-blue-600 hover:to-cyan-600 transition-all shadow-lg text-sm"
                 >
                   <Lock size={18} />
                   Change Password
                 </button>
                 <button
                   onClick={() => setView('public')}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg"
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl hover:from-green-600 hover:to-emerald-600 transition-all shadow-lg text-sm"
                 >
                   <Star size={18} />
                   View Public Site
                 </button>
                 <button
                   onClick={handleLogout}
-                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-500 to-gray-600 text-white rounded-xl hover:from-gray-600 hover:to-gray-700 transition-all shadow-lg"
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-gray-500 to-gray-600 text-white rounded-xl hover:from-gray-600 hover:to-gray-700 transition-all shadow-lg text-sm"
                 >
                   <LogOut size={18} />
                   Logout
